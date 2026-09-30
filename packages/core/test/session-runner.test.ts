@@ -78,7 +78,7 @@ import { Location } from "@opencode/core/location"
 import { Provider } from "@opencode/core/provider"
 import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
-import { asc, desc, eq, sql } from "drizzle-orm"
+import { asc, desc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { promptLocationNode } from "./fixture/prompt-location"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
@@ -4564,6 +4564,7 @@ describe("SessionRunnerLLM", () => {
       id: "call-interrupted-subagent",
       metadata: { sessionID: "ses_existing_child", status: "running", internal: "private" },
     })
+    yield* replaySessionProjection(sessionID)
     s.requests.length = 0
     yield* s.llm.push([])
     yield* s.resume
