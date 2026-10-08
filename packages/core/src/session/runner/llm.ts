@@ -36,7 +36,7 @@ const CONTINUE_AFTER_INCOMPLETE_STREAM =
   "The previous response was interrupted. Continue from where you left off without repeating completed content."
 
 const CONTINUE_AFTER_OUTPUT_LIMIT =
-  "Your last response reached the output token limit. Continue where you left off. Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."
+  "Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."
 
 const layer = Layer.effect(
   Service,
@@ -329,7 +329,7 @@ const layer = Layer.effect(
         if (message.type === "user") break
         if (
           message.type === "assistant" &&
-          (message.finish === "stop" || message.content.some((part) => part.type === "tool"))
+          (message.finish === "stop" || message.content.some((part) => part.type === "tool" && part.executed !== true))
         )
           break
         if (message.type !== "synthetic") continue

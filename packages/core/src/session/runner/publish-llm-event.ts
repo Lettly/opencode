@@ -43,7 +43,6 @@ export interface StepRecord {
     readonly tokens: ReturnType<typeof SessionUsage.tokens>
   }
   readonly needsContinuation: boolean
-  readonly hasTools: boolean
 }
 
 /** Derives canonical model content from a provider-hosted tool result. */
@@ -84,6 +83,8 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     settled: boolean
     providerExecuted: boolean
     progress?: Tool.Metadata
+    input?: { readonly excerpt: string; readonly length: number }
+    malformed?: boolean
   }
   const tools = new Map<string, ToolState>()
   const failureSnapshot = (tool: { readonly progress?: Tool.Metadata }, metadata?: Tool.Metadata) => {
@@ -255,6 +256,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     Effect.gen(function* () {
       const tool = tools.get(id)
       if (!tool) return yield* Effect.die(new Error(`Tool input end before start: ${id}`))
+      tool.input = { excerpt: value.slice(0, 2048), length: value.length }
       yield* bus.publish(SessionEvent.Tool.Input.Ended, {
         sessionID: input.sessionID,
         assistantMessageID,
@@ -325,21 +327,18 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     if (tool.name !== event.name)
       return yield* Effect.die(new Error(`Tool input name changed for ${event.id}: ${tool.name} -> ${event.name}`))
     if (toolInput.has(event.id)) yield* endToolInput(event, event.raw)
-    tool.settled = true
-    yield* bus.publish(SessionEvent.Tool.Failed, {
-      sessionID: input.sessionID,
-      assistantMessageID,
-      id: event.id,
-      error: {
-        type: "tool.input-json",
-        message: "Tool call arguments were malformed JSON and were not executed. Retry with valid JSON.",
-      },
-      ...failureSnapshot(tool),
-      executed: false,
-    })
+    tool.input = { excerpt: event.raw.slice(0, 2048), length: event.raw.length }
+    tool.malformed = true
   })
 
-  const flush = Effect.fn("SessionRunner.flush")(flushFragments)
+  const flush = Effect.fn("SessionRunner.flush")(function* () {
+    yield* flushFragments()
+    // The finish reason distinguishes invalid JSON from arguments cut off by the output limit.
+    for (const [id, tool] of tools) {
+      if (!tool.malformed || tool.settled) continue
+      yield* failTool(id, inputFailure(tool.input, stepSettlement?.finish === "length" ? "length" : "malformed"))
+    }
+  })
 
   const failTool = Effect.fnUntraced(function* (id: string, error: SessionError.Error, metadata?: Tool.Metadata) {
     const tool = tools.get(id)
@@ -364,7 +363,13 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     for (const [id, tool] of tools) {
       if (tool.settled || (mode === "hosted" && !tool.providerExecuted) || (mode === "uncalled" && tool.called))
         continue
-      failed = (yield* failTool(id, error)) || failed
+      failed =
+        (yield* failTool(
+          id,
+          mode === "uncalled" && error.type === "tool.input-incomplete"
+            ? inputFailure(tool.input, stepSettlement?.finish === "length" ? "length" : "incomplete")
+            : error,
+        )) || failed
     }
     return failed
   })
@@ -535,7 +540,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
         return
       }
       case "step-finish":
-        yield* flush()
+        yield* flushFragments()
         if (stepSettlement) return yield* Effect.die(new Error("Duplicate step finish"))
         stepSettlement = {
           finish: event.reason.normalized,
@@ -613,7 +618,6 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       providerFailed,
       failure: stepFailure,
       finish: stepSettlement,
-      hasTools: tools.size > 0,
       needsContinuation: Iterable.some(
         tools.values(),
         (tool) => !tool.providerExecuted && (tool.called || tool.settled),
@@ -621,5 +625,24 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     }),
     startAssistant,
     streamed,
+  }
+}
+
+function inputFailure(
+  input: { readonly excerpt: string; readonly length: number } | undefined,
+  reason: "malformed" | "length" | "incomplete",
+) {
+  const message =
+    reason === "length"
+      ? "The tool call was not executed because the output token limit (stop reason: length) was reached before you could complete the arguments. Break large payloads into smaller tool calls and reissue the call with complete arguments."
+      : reason === "malformed"
+        ? "The tool input could not be parsed as JSON, so the call was not executed. Reissue the call with valid JSON arguments."
+        : "Tool call arguments were not completed and were not executed. Reissue the call with complete arguments."
+  return {
+    type: reason === "malformed" ? "tool.input-json" : "tool.input-incomplete",
+    message:
+      input === undefined
+        ? message
+        : `${message}\n\nInput excerpt (first ${input.excerpt.length} of ${input.length} characters):\n${input.excerpt}${input.length > input.excerpt.length ? "\n[truncated]" : ""}`,
   }
 }
