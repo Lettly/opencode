@@ -287,7 +287,7 @@ const layer = Layer.effect(
             yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: CONTINUE_AFTER_INCOMPLETE_STREAM })
             assistantMessageID = SessionMessage.ID.create()
           }),
-          OutputLimit: Effect.fnUntraced(function* () {
+          OutputLimit: Effect.fn("SessionRunner.continueOutputLimit")(function* () {
             // Include the current response; new user input or local tool progression breaks the streak.
             const rows = yield* db
               .select()
