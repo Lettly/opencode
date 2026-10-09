@@ -1,7 +1,7 @@
 import { Effect, Layer } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 
-type ResponseMode = "valid" | "invalid" | "503"
+type ResponseMode = "valid" | "invalid" | "503" | "hang"
 
 export function wellknownFixture() {
   const origin = "http://127.0.0.1:8787"
@@ -13,7 +13,7 @@ export function wellknownFixture() {
   const http = Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request, url) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         requests.push({ path: url.pathname, response, revision, manifestAvailable: available })
         if (url.origin !== origin) return HttpClientResponse.fromWeb(request, new Response(null, { status: 404 }))
         if (url.pathname === "/.well-known/opencode")
@@ -33,6 +33,7 @@ export function wellknownFixture() {
         if (url.pathname !== "/config") return HttpClientResponse.fromWeb(request, new Response(null, { status: 404 }))
         if (request.headers.authorization !== "Bearer fixture-token")
           return HttpClientResponse.fromWeb(request, new Response(null, { status: 401 }))
+        if (response === "hang") return yield* Effect.never
         if (response === "503") return HttpClientResponse.fromWeb(request, new Response(null, { status: 503 }))
         return HttpClientResponse.fromWeb(
           request,

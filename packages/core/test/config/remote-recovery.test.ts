@@ -1,6 +1,7 @@
 import path from "path"
 import { expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Fiber, Layer } from "effect"
+import { TestClock } from "effect/testing"
 import { Config } from "@opencode/core/config"
 import { ConfigNormalize } from "@opencode/core/config/normalize"
 import { Credential } from "@opencode/core/credential"
@@ -118,12 +119,41 @@ it.live(
         const during = yield* freshEntries()
         const document = before.find((entry) => entry.type === "document" && entry.info.providers?.["fixture-org"])
         expect(
-          document?.type === "document" ? `${document.info.model?.providerID}/${document.info.model?.model}` : undefined,
+          document?.type === "document"
+            ? `${document.info.model?.providerID}/${document.info.model?.model}`
+            : undefined,
         ).toBe("fixture-org/fixture-chat")
         expect(during).toEqual(before)
         expect(
           fixture.requests.filter((request) => request.path === "/config").map((request) => request.response),
         ).toEqual(["valid", "503"])
+      }).pipe(Effect.provide(fixture.layer))
+    }).pipe(Effect.timeout("5 seconds")),
+  6000,
+)
+
+it.live(
+  "times out a hung remote config fetch after 15 seconds and retains the last-good config",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* configurationFixture()
+      yield* Effect.gen(function* () {
+        const wellknown = yield* WellKnown.Service
+        const entry = yield* wellknown.add(fixture.origin)
+        const variables = { FIXTURE_TOKEN: "fixture-token" }
+        const before = yield* wellknown.resolve(entry, variables, "fixture-credential")
+        fixture.remote("hang")
+        const during = yield* Effect.gen(function* () {
+          const pending = yield* wellknown
+            .resolve(entry, variables, "fixture-credential")
+            .pipe(Effect.forkScoped({ startImmediately: true }))
+          yield* TestClock.adjust("15 seconds")
+          return yield* Fiber.join(pending)
+        }).pipe(Effect.provide(TestClock.layer()))
+        expect(during).toEqual(before)
+        expect(
+          fixture.requests.filter((request) => request.path === "/config").map((request) => request.response),
+        ).toEqual(["valid", "hang"])
       }).pipe(Effect.provide(fixture.layer))
     }).pipe(Effect.timeout("5 seconds")),
   6000,
