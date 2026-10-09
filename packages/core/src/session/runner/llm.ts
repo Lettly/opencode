@@ -287,8 +287,8 @@ const layer = Layer.effect(
             yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: CONTINUE_AFTER_INCOMPLETE_STREAM })
             assistantMessageID = SessionMessage.ID.create()
           }),
-          OutputLimit: Effect.fn("SessionRunner.continueOutputLimit")(function* () {
-            // Include the current response; new user input or local tool progression breaks the streak.
+          OutputLimit: Effect.fn("SessionRunner.continueOutputLimit")(function* (outcome) {
+            // Include the current response; only new user input or a different finish reason breaks the streak.
             const rows = yield* db
               .select()
               .from(SessionMessageTable)
@@ -305,12 +305,7 @@ const layer = Layer.effect(
             const recent = yield* Effect.forEach(rows, SessionHistory.decodeMessageRow)
             if (
               recent.length === 3 &&
-              recent.every(
-                (message) =>
-                  message.type === "assistant" &&
-                  message.finish === "length" &&
-                  !message.content.some((part) => part.type === "tool" && part.executed !== true),
-              )
+              recent.every((message) => message.type === "assistant" && message.finish === "length")
             )
               return yield* new StepFailedError({
                 error: {
@@ -318,6 +313,7 @@ const layer = Layer.effect(
                   message: "Response still truncated after two output token limit continuations",
                 },
               })
+            if (outcome.needsContinuation) return true
             yield* bus.publish(SessionEvent.Synthetic, {
               sessionID,
               text: CONTINUE_AFTER_OUTPUT_LIMIT,

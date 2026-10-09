@@ -5580,38 +5580,54 @@ describe("SessionRunnerLLM", () => {
     })
   }
 
-  scenario("caps output token limit continuations durably and resets for new input", function* (s) {
-    const truncated = () =>
-      TestLLM.complete(
-        { reason: { normalized: "length" } },
-        hostedCall("hosted-search", "Search"),
-        LLMEvent.toolResult({
-          id: "hosted-search",
-          name: "web_search",
-          providerExecuted: true,
-          result: { type: "json", value: [] },
-        }),
-        LLMEvent.textStart({ id: "partial" }),
-        LLMEvent.textDelta({ id: "partial", text: "Partial" }),
-        LLMEvent.textEnd({ id: "partial" }),
+  for (const tools of ["hosted", "unfinished"] as const) {
+    scenario(`caps output token limit continuations and resets for new input (${tools})`, function* (s) {
+      const truncated = () =>
+        TestLLM.complete(
+          { reason: { normalized: "length" } },
+          ...(tools === "hosted"
+            ? [
+                hostedCall("hosted-search", "Search"),
+                LLMEvent.toolResult({
+                  id: "hosted-search",
+                  name: "web_search",
+                  providerExecuted: true,
+                  result: { type: "json", value: [] },
+                }),
+              ]
+            : [
+                LLMEvent.toolInputStart({ id: "call-incomplete", name: "echo" }),
+                LLMEvent.toolInputDelta({ id: "call-incomplete", name: "echo", text: '{"text":"partial' }),
+              ]),
+          LLMEvent.textStart({ id: "partial" }),
+          LLMEvent.textDelta({ id: "partial", text: "Partial" }),
+          LLMEvent.textEnd({ id: "partial" }),
+        )
+      yield* s.llm.push(...Array.from({ length: 3 }, truncated))
+
+      expect(yield* s.runPrompt("Keep going").pipe(Effect.flip)).toMatchObject({ error: { type: "output-limit" } })
+      expect(s.requests).toHaveLength(3)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(
+        tools === "hosted" ? 2 : 0,
       )
-    yield* s.llm.push(...Array.from({ length: 3 }, truncated))
+      expect(s.executions).toEqual([])
 
-    expect(yield* s.runPrompt("Keep going").pipe(Effect.flip)).toMatchObject({ error: { type: "output-limit" } })
-    expect(s.requests).toHaveLength(3)
-    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(2)
+      yield* replaySessionProjection(sessionID)
+      yield* s.llm.push(truncated())
+      expect(yield* s.resume.pipe(Effect.flip)).toMatchObject({ error: { type: "output-limit" } })
+      expect(s.requests).toHaveLength(4)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(
+        tools === "hosted" ? 2 : 0,
+      )
 
-    yield* replaySessionProjection(sessionID)
-    yield* s.llm.push(truncated())
-    expect(yield* s.resume.pipe(Effect.flip)).toMatchObject({ error: { type: "output-limit" } })
-    expect(s.requests).toHaveLength(4)
-    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(2)
-
-    yield* s.llm.push(truncated(), TestLLM.text("Finished", "finished"))
-    yield* s.runPrompt("Try a new response")
-    expect(s.requests).toHaveLength(6)
-    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
-  })
+      yield* s.llm.push(truncated(), TestLLM.text("Finished", "finished"))
+      yield* s.runPrompt("Try a new response")
+      expect(s.requests).toHaveLength(6)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(
+        tools === "hosted" ? 3 : 0,
+      )
+    })
+  }
 
   scenario("continues an incomplete stream after observable text", function* (s) {
     const failure = incompleteStream()
