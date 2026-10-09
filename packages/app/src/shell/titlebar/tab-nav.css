@@ -110,8 +110,8 @@
   content: "";
   position: absolute;
   top: 8px;
-  inset-inline-start: -3.75px;
-  width: 1.5px;
+  inset-inline-start: -3px;
+  width: 1px;
   height: 12px;
   border-radius: 9999px;
   background: var(--tab-separator);
