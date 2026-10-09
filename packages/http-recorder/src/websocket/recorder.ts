@@ -137,10 +137,9 @@ const assertEvent = (actual: WebSocketEvent, expected: WebSocketEvent | undefine
   })
 const isNormalClose = (error: unknown) =>
   Socket.isSocketError(error) && error.reason._tag === "SocketCloseError" && error.reason.code === 1000
-const isNormalExit = (exit: Exit.Exit<unknown, unknown>) =>
-  Exit.isSuccess(exit) ||
-  (exit.cause.reasons.length > 0 &&
-    exit.cause.reasons.every((reason) => Cause.isFailReason(reason) && isNormalClose(reason.error)))
+const isNormalCause = (cause: Cause.Cause<unknown>) =>
+  cause.reasons.length > 0 && cause.reasons.every((reason) => Cause.isFailReason(reason) && isNormalClose(reason.error))
+const isNormalExit = (exit: Exit.Exit<unknown, unknown>) => Exit.isSuccess(exit) || isNormalCause(exit.cause)
 const makeRecordingSocket = (
   upstream: Socket.Socket,
   cassette: Interface,
@@ -198,9 +197,9 @@ const makeRecordingSocket = (
                 }),
               ),
             ),
-            Effect.tapError((error) =>
+            Effect.onError((cause) =>
               Effect.sync(() => {
-                if (!isNormalClose(error)) state.valid = false
+                if (!isNormalCause(cause)) state.valid = false
               }),
             ),
           ),

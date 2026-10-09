@@ -399,6 +399,50 @@ describe("WebSocket", () => {
     expect(existsSync(`${directory.path}/websocket/post-close-defect.json`)).toBe(false)
   })
 
+  test.each(["defect", "interruption", "timeout"])(
+    "does not record a reader %s caught inside its scope",
+    async (ending) => {
+      using directory = tempDirectory("http-recorder-websocket-")
+      let sent = false
+      const upstream = Socket.make({
+        reader: Effect.succeed({
+          pull: Effect.suspend(() => {
+            if (!sent) {
+              sent = true
+              return Effect.succeed(["partial"])
+            }
+            if (ending === "defect") return Effect.die(new Error("reader failed"))
+            if (ending === "interruption") return Effect.interrupt
+            return Effect.never
+          }),
+          upgrade: Socket.SocketUpgradeError.unsupported,
+        }),
+        writer: Effect.succeed({ write: () => Effect.void, writeAll: () => Effect.void }),
+      })
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const socket = yield* Socket.Socket
+          const reader = yield* socket.reader
+          expect(yield* reader.pull).toEqual(["partial"])
+          yield* reader.pull.pipe(
+            Effect.timeout("10 millis"),
+            Effect.catchCause(() => Effect.void),
+          )
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            layerSocketWithMode("websocket/caught-ending", { directory: directory.path, mode: "record" }).pipe(
+              Layer.provide(Layer.succeed(Socket.Socket, upstream)),
+            ),
+          ),
+        ),
+      )
+
+      expect(existsSync(`${directory.path}/websocket/caught-ending.json`)).toBe(false)
+    },
+  )
+
   test("WebSocket replay preserves causal frame ordering", async () => {
     using directory = tempDirectory("http-recorder-websocket-")
     await seedCassetteDirectory(directory.path, "websocket/replay", [
