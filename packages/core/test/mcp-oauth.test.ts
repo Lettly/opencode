@@ -232,19 +232,7 @@ describe("MCP OAuth", () => {
         },
       })
       const initial = memoryCredentials([
-        new Credential.Info({
-          id: Credential.ID.make("cred_test"),
-          integrationID,
-          label: "test",
-          value: Credential.OAuth.make({
-            type: "oauth",
-            methodID,
-            access: "old-access",
-            refresh: "old-refresh",
-            expires: 1,
-            metadata: { serverUrl: server.url.href, issuer: server.url.href, tokenType: "Bearer" },
-          }),
-        }),
+        credential({ access: "old-access", refresh: "old-refresh", url: server.url.href }),
       ])
       const store = {
         ...initial,
