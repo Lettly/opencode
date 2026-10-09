@@ -8909,11 +8909,18 @@
             }
           },
           "404": {
-            "description": "LocationNotFoundError",
+            "description": "FileNotFoundError | LocationNotFoundError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FileNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/LocationNotFoundErrorEncoded"
+                    }
+                  ]
                 }
               }
             }
@@ -18928,6 +18935,9 @@
           "outcome": {
             "type": "string",
             "enum": ["succeeded", "failed", "interrupted"]
+          },
+          "error": {
+            "$ref": "#/components/schemas/Session.StructuredError"
           }
         },
         "required": ["id", "time", "type", "outcome"],
