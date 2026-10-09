@@ -1,5 +1,5 @@
 import type { SessionMessageAssistant, SessionMessageInfo, SessionMessageUser } from "@opencode/client/promise"
-import { createMemo, createSelector, For, onCleanup, onMount, Show, type Accessor } from "solid-js"
+import { createEffect, createMemo, createSelector, For, onCleanup, onMount, Show, type Accessor } from "solid-js"
 import { createStore } from "solid-js/store"
 import { readPromptPresentation } from "@/composer/comment-note"
 import { useServerSDK } from "@/runtime/server/client"
@@ -8,6 +8,9 @@ const turnPageLimit = 200
 
 // Previews clamp to a few lines; keep only enough text to fill them.
 const previewLength = 400
+
+// A pointer resting this long on an unloaded turn fetches its reply; sweeping across the rail fetches nothing.
+const replyHoverDelay = 150
 
 type TurnNavigatorProps = {
   sessionID: string
@@ -22,7 +25,7 @@ type TurnNavigatorProps = {
 
 /**
  * A mouse rail of the session's user turns beside the timeline. While older history is unloaded, turns come from the
- * server's user-message index; a turn's response previews only once its messages are loaded. Keyboard users move
+ * server's user-message index, and hovering an unloaded turn fetches only its latest reply. Keyboard users move
  * between turns with the previous and next message commands.
  *
  * Nothing loads or renders until a mouse first moves over the timeline, which keeps the rail off session entry and
@@ -86,7 +89,12 @@ export function TurnNavigator(props: TurnNavigatorProps) {
 }
 
 function TurnRail(props: TurnNavigatorProps & { index?: Map<string, string>; root: HTMLDivElement }) {
-  const [state, setState] = createStore<{ hover?: { id: string; top: number } }>({})
+  const sdk = useServerSDK()
+  // Fetched replies by user message ID; null while loading or when the turn has no reply text.
+  const [state, setState] = createStore<{
+    hover?: { id: string; top: number }
+    replies: Record<string, string | null>
+  }>({ replies: {} })
 
   const loaded = createMemo(
     () =>
@@ -101,6 +109,31 @@ function TurnRail(props: TurnNavigatorProps & { index?: Map<string, string>; roo
       .toSorted()
   })
 
+  // The turn's latest reply is the newest assistant message before the next turn.
+  const loadReply = async (id: string) => {
+    setState("replies", id, null)
+    const list = turns()
+    const next = list[list.indexOf(id) + 1] ?? props.revertMessageID()
+    const page = await sdk.api.message.list({
+      sessionID: props.sessionID,
+      type: "assistant",
+      limit: 1,
+      ...(next ? { before: next } : {}),
+    })
+    const message = page.data[0]
+
+    if (message?.type !== "assistant" || message.id < id) return
+    setState("replies", id, replyText([message]) ?? null)
+  }
+
+  createEffect(() => {
+    const id = state.hover?.id
+
+    if (!id || loaded().has(id) || state.replies[id] !== undefined) return
+    const timer = setTimeout(() => void loadReply(id).catch(() => undefined), replyHoverDelay)
+    onCleanup(() => clearTimeout(timer))
+  })
+
   const active = createSelector(props.activeUserMessageID)
   const hovered = createSelector(() => state.hover?.id)
 
@@ -109,16 +142,13 @@ function TurnRail(props: TurnNavigatorProps & { index?: Map<string, string>; roo
 
     if (!hover) return
     const message = loaded().get(hover.id)
-    const text = props
-      .assistantMessagesByParent()
-      .get(hover.id)
-      ?.flatMap((item) => item.content)
-      .findLast((content) => content.type === "text" && content.text.trim())
 
     return {
       top: hover.top,
       prompt: message ? promptPreview(message) : props.index?.get(hover.id),
-      response: text?.type === "text" ? previewText(text.text) : undefined,
+      response: message
+        ? replyText(props.assistantMessagesByParent().get(hover.id) ?? [])
+        : (state.replies[hover.id] ?? undefined),
     }
   })
 
@@ -182,6 +212,14 @@ function TurnRail(props: TurnNavigatorProps & { index?: Map<string, string>; roo
 
 function promptPreview(message: SessionMessageUser) {
   return previewText(readPromptPresentation(message.metadata)?.displayText ?? message.text)
+}
+
+function replyText(messages: SessionMessageAssistant[]) {
+  const text = messages
+    .flatMap((message) => message.content)
+    .findLast((content) => content.type === "text" && content.text.trim())
+
+  return text?.type === "text" ? previewText(text.text) : undefined
 }
 
 function previewText(text: string) {
