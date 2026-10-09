@@ -75,11 +75,7 @@ const layer = Layer.succeed(Socket.WebSocketConstructor, (url, input) => {
     // Reject redirects before headers can cross an origin boundary; the caller safely falls back to HTTP.
     followRedirects: false,
   }
-  const socket = config.protocols
-    ? new NodeWS.WebSocket(url, config.protocols, native)
-    : new NodeWS.WebSocket(url, native)
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- ws implements the WebSocket surface consumed by the AI transport.
-  return socket as unknown as globalThis.WebSocket
+  return config.protocols ? new NodeWS.WebSocket(url, config.protocols, native) : new NodeWS.WebSocket(url, native)
 })
 
 export const WebSocketConstructor = { layer, proxy } as const
