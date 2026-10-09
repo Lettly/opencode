@@ -1,7 +1,7 @@
 export * as SessionRunnerLLM from "./llm.js"
 
 import { Message } from "@opencode/ai"
-import { and, desc, eq, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
 import { Database } from "../../database/database.js"
 import { Bus } from "../../bus.js"
@@ -288,17 +288,39 @@ const layer = Layer.effect(
             assistantMessageID = SessionMessage.ID.create()
           }),
           OutputLimit: Effect.fnUntraced(function* () {
-            if ((yield* outputLimitNudges(sessionID)) >= 3)
+            // Include the current response; new user input or local tool progression breaks the streak.
+            const rows = yield* db
+              .select()
+              .from(SessionMessageTable)
+              .where(
+                and(
+                  eq(SessionMessageTable.session_id, sessionID),
+                  inArray(SessionMessageTable.type, ["user", "assistant"]),
+                ),
+              )
+              .orderBy(desc(SessionMessageTable.seq))
+              .limit(3)
+              .all()
+              .pipe(Effect.orDie)
+            const recent = yield* Effect.forEach(rows, SessionHistory.decodeMessageRow)
+            if (
+              recent.length === 3 &&
+              recent.every(
+                (message) =>
+                  message.type === "assistant" &&
+                  message.finish === "length" &&
+                  !message.content.some((part) => part.type === "tool" && part.executed !== true),
+              )
+            )
               return yield* new StepFailedError({
                 error: {
                   type: "output-limit",
-                  message: "Response still truncated after three output token limit continuations",
+                  message: "Response still truncated after two output token limit continuations",
                 },
               })
             yield* bus.publish(SessionEvent.Synthetic, {
               sessionID,
               text: CONTINUE_AFTER_OUTPUT_LIMIT,
-              metadata: { outputLimitContinuation: true },
             })
             assistantMessageID = SessionMessage.ID.create()
           }),
@@ -312,35 +334,6 @@ const layer = Layer.effect(
         })
         if (completed !== undefined) return completed
       }
-    })
-
-    const outputLimitNudges = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-      // Read durable history, not the compacted model context, so compaction and restart retain the cap.
-      const rows = yield* db
-        .select()
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, sessionID))
-        .orderBy(desc(SessionMessageTable.seq))
-        .all()
-        .pipe(Effect.orDie)
-      let count = 0
-      for (const row of rows) {
-        const message = yield* SessionHistory.decodeMessageRow(row)
-        if (message.type === "user") break
-        if (
-          message.type === "assistant" &&
-          (message.finish === "stop" || message.content.some((part) => part.type === "tool" && part.executed !== true))
-        )
-          break
-        if (message.type !== "synthetic") continue
-        if (message.metadata?.outputLimitContinuation === true) {
-          count++
-          if (count === 3) break
-          continue
-        }
-        if (message.text !== CONTINUE_AFTER_INCOMPLETE_STREAM) break
-      }
-      return count
     })
 
     const settleStaleCompactions = Effect.fn("SessionRunner.settleStaleCompactions")(function* (

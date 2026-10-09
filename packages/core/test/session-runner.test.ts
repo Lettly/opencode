@@ -5573,7 +5573,7 @@ describe("SessionRunnerLLM", () => {
         Expected.assistant({ finish: "length" }, [
           type === "text" ? Expected.text("Partial") : Expected.reasoning("Partial"),
         ]),
-        { type: "synthetic", text: nudge, metadata: { outputLimitContinuation: true } },
+        { type: "synthetic", text: nudge },
         Expected.assistant({ finish: "stop" }, [Expected.text("Finished")]),
       ])
       expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
@@ -5595,22 +5595,22 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.textDelta({ id: "partial", text: "Partial" }),
         LLMEvent.textEnd({ id: "partial" }),
       )
-    yield* s.llm.push(...Array.from({ length: 4 }, truncated))
+    yield* s.llm.push(...Array.from({ length: 3 }, truncated))
 
     expect(yield* s.runPrompt("Keep going").pipe(Effect.flip)).toMatchObject({ error: { type: "output-limit" } })
-    expect(s.requests).toHaveLength(4)
-    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
+    expect(s.requests).toHaveLength(3)
+    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(2)
 
     yield* replaySessionProjection(sessionID)
     yield* s.llm.push(truncated())
     expect(yield* s.resume.pipe(Effect.flip)).toMatchObject({ error: { type: "output-limit" } })
-    expect(s.requests).toHaveLength(5)
-    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
+    expect(s.requests).toHaveLength(4)
+    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(2)
 
     yield* s.llm.push(truncated(), TestLLM.text("Finished", "finished"))
     yield* s.runPrompt("Try a new response")
-    expect(s.requests).toHaveLength(7)
-    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(4)
+    expect(s.requests).toHaveLength(6)
+    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
   })
 
   scenario("continues an incomplete stream after observable text", function* (s) {
